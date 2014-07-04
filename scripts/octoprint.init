@@ -16,8 +16,8 @@
 # Author: Sami Olmari
 
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-DESC="Octoprint Daemon"
-NAME="Octoprint"
+DESC="OctoPrint Daemon"
+NAME="OctoPrint"
 DAEMON=/usr/bin/octoprint
 PIDFILE=/var/run/$NAME.pid
 PKGNAME=octoprint
@@ -26,7 +26,7 @@ SCRIPTNAME=/etc/init.d/$PKGNAME
 # Read configuration variable file if it is present
 [ -r /etc/default/$PKGNAME ] && . /etc/default/$PKGNAME
 
-# Exit if the octoprint is not installed
+# Exit if octoprint is not installed
 [ -x "$DAEMON" ] || exit 0
 
 # Load the VERBOSE setting and other rcS variables
