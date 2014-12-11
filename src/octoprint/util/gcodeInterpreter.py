@@ -26,6 +26,7 @@ class gcode(object):
 		self.extrusionAmount = [0]
 		self.extrusionVolume = [0]
 		self.totalMoveTimeMinute = 0
+		self.timeDistribution = []
 		self.filename = None
 		self.progressCallback = None
 		self._abort = False
@@ -42,6 +43,8 @@ class gcode(object):
 		self._abort = True
 
 	def _load(self, gcodeFile, printer_profile):
+		import math
+
 		filePos = 0
 		pos = [0.0, 0.0, 0.0]
 		posOffset = [0.0, 0.0, 0.0]
@@ -53,20 +56,28 @@ class gcode(object):
 		absoluteE = True
 		scale = 1.0
 		posAbs = True
-		feedRateXY = min(printer_profile["axes"]["x"], printer_profile["axes"]["y"])
+		feedRateXY = min(printer_profile["axes"]["x"]["speed"], printer_profile["axes"]["y"]["speed"])
 		offsets = printer_profile["extruder"]["offsets"]
+
+		percentageInterval = 5
+		nextPercentage = percentageInterval
+		percentageMoveTimeMinute = []
 
 		for line in gcodeFile:
 			if self._abort:
 				raise AnalysisAborted()
 			filePos += 1
 
+			if isinstance(gcodeFile, (file)):
+				percentage = float(gcodeFile.tell()) / float(self._fileSize)
+			elif isinstance(gcodeFile, (list)):
+				percentage = float(filePos) / float(len(gcodeFile))
+			else:
+				percentage = None
+
 			try:
-				if self.progressCallback is not None and (filePos % 1000 == 0):
-					if isinstance(gcodeFile, (file)):
-						self.progressCallback(float(gcodeFile.tell()) / float(self._fileSize))
-					elif isinstance(gcodeFile, (list)):
-						self.progressCallback(float(filePos) / float(len(gcodeFile)))
+				if self.progressCallback is not None and (filePos % 1000 == 0) and percentage is not None:
+					self.progressCallback(percentage)
 			except:
 				pass
 
@@ -223,6 +234,12 @@ class gcode(object):
 						for i in range(len(totalExtrusion), currentExtruder + 1):
 							totalExtrusion.append(0.0)
 
+			if math.floor(percentage * 100) >= nextPercentage:
+				nextPercentagePlusOne = nextPercentage + percentageInterval
+				print("percentage: {percentage}, nextPercentage: {nextPercentage}, nextPercentage + 1: {nextPercentagePlusOne}, totalMoveTime: {totalMoveTimeMinute}".format(**locals()))
+				nextPercentage = nextPercentagePlusOne
+				percentageMoveTimeMinute.append(totalMoveTimeMinute)
+
 		if self.progressCallback is not None:
 			self.progressCallback(100.0)
 
@@ -232,6 +249,7 @@ class gcode(object):
 			radius = self._filamentDiameter / 2
 			self.extrusionVolume[i] = (self.extrusionAmount[i] * (math.pi * radius * radius)) / 1000
 		self.totalMoveTimeMinute = totalMoveTimeMinute
+		self.timeDistribution = [(x / totalMoveTimeMinute if totalMoveTimeMinute else 0) for x in percentageMoveTimeMinute]
 
 	def _parseCuraProfileString(self, comment):
 		return {key: value for (key, value) in map(lambda x: x.split("=", 1), zlib.decompress(base64.b64decode(comment[len("CURA_PROFILE_STRING:"):])).split("\b"))}

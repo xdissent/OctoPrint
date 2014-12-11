@@ -34,6 +34,7 @@ class Printer():
 		from collections import deque
 
 		self._logger = logging.getLogger(__name__)
+		self._estimationLogger = logging.getLogger("ESTIMATIONS")
 
 		self._analysisQueue = analysisQueue
 		self._fileManager = fileManager
@@ -285,6 +286,7 @@ class Printer():
 
 		self._setCurrentZ(None)
 		self._comm.startPrint()
+		self._estimationLogger.info("-------------------------------------------")
 
 	def togglePausePrint(self):
 		"""
@@ -347,16 +349,49 @@ class Printer():
 		self._messages.append(message)
 		self._stateMonitor.addMessage(message)
 
+	def _estimateTotalPrintTime(self, progress, printTime):
+		""" Distribution percentage based"""
+		returnValue = None
+
+		if not progress or not printTime:
+			self._estimationLogger.info("{progress};{printTime};0.0;{progress}".format(**locals()))
+
+		elif 0.01 <= progress < 0.25 and self._selectedFile and "printTimeDistribution" in self._selectedFile and self._selectedFile["printTimeDistribution"] and "estimatedPrintTime" in self._selectedFile:
+			printTimeDistribution = self._selectedFile["printTimeDistribution"]
+			prevVal = 0
+
+			for start, end, val in printTimeDistribution:
+				if progress > end:
+					prevVal = val
+					continue
+
+				estimatedProgress = prevVal + ((progress - start) / (end - start)) * (val - prevVal)
+				if not estimatedProgress:
+					returnValue = None
+				else:
+					returnValue = printTime / estimatedProgress
+
+				self._estimationLogger.info("{progress};{printTime};{returnValue};{estimatedProgress}".format(**locals()))
+				break
+
+		elif progress >= 0.25:
+			returnValue = printTime / progress
+			self._estimationLogger.info("{progress};{printTime};{returnValue};{progress}".format(**locals()))
+
+		return returnValue
+
 	def _setProgressData(self, progress, filepos, printTime, printTimeLeft):
+		estimatedTotalPrintTime = self._estimateTotalPrintTime(progress, printTime)
+
 		self._progress = progress
 		self._printTime = printTime
-		self._printTimeLeft = printTimeLeft
+		self._printTimeLeft = estimatedTotalPrintTime - printTime if (estimatedTotalPrintTime is not None and printTime is not None) else None
 
 		self._stateMonitor.setProgress({
 			"completion": self._progress * 100 if self._progress is not None else None,
 			"filepos": filepos,
 			"printTime": int(self._printTime) if self._printTime is not None else None,
-			"printTimeLeft": int(self._printTimeLeft * 60) if self._printTimeLeft is not None else None
+			"printTimeLeft": int(self._printTimeLeft) if self._printTimeLeft is not None else None
 		})
 
 	def _addTemperatureData(self, temp, bedTemp):
@@ -388,7 +423,9 @@ class Printer():
 			self._selectedFile = {
 				"filename": filename,
 				"filesize": filesize,
-				"sd": sd
+				"sd": sd,
+				"printTimeDistribution": None,
+				"estimatedPrintTime": None,
 			}
 		else:
 			self._selectedFile = None
@@ -422,8 +459,13 @@ class Printer():
 				if "analysis" in fileData:
 					if estimatedPrintTime is None and "estimatedPrintTime" in fileData["analysis"]:
 						estimatedPrintTime = fileData["analysis"]["estimatedPrintTime"]
+						self._selectedFile["estimatedPrintTime"] = estimatedPrintTime
 					if "filament" in fileData["analysis"].keys():
 						filament = fileData["analysis"]["filament"]
+					if "printTimeDistribution" in fileData["analysis"] and isinstance(fileData["analysis"]["printTimeDistribution"], (list, tuple)) and fileData["analysis"]["printTimeDistribution"]:
+						printTimeDistribution = fileData["analysis"]["printTimeDistribution"]
+						interval = 1.0 / len(printTimeDistribution)
+						self._selectedFile["printTimeDistribution"] = [(idx * interval, (idx+1) * interval, val) for idx, val in enumerate(printTimeDistribution)]
 				if "prints" in fileData and fileData["prints"] and "last" in fileData["prints"] and fileData["prints"]["last"] and "lastPrintTime" in fileData["prints"]["last"]:
 					lastPrintTime = fileData["prints"]["last"]["lastPrintTime"]
 

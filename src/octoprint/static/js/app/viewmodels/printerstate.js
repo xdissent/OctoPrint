@@ -64,7 +64,8 @@ function PrinterStateViewModel(loginStateViewModel) {
     self.printTimeLeftString = ko.computed(function() {
         if (!self.printTimeLeft())
             return "-";
-        return formatDuration(self.printTimeLeft());
+        //return formatDuration(self.printTimeLeft());
+        return formatFuzzyEstimation(self.printTimeLeft());
     });
     self.progressString = ko.computed(function() {
         if (!self.progress())
