@@ -89,14 +89,16 @@ def getGitInfo():
 	return (branch, head)
 
 
-def getNewTimeout(type):
+def getNewTimeout(type, factor=None):
 	now = time.time()
 
 	if type not in default_settings["serial"]["timeout"].keys():
 		# timeout immediately for unknown timeout type
 		return now
 
-	return now + settings().getFloat(["serial", "timeout", type])
+	if factor is None:
+		factor = 1.0
+	return now + settings().getFloat(["serial", "timeout", type]) * factor
 
 
 def getFreeBytes(path):

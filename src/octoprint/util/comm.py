@@ -116,7 +116,9 @@ class MachineCom(object):
 	STATE_ERROR = 9
 	STATE_CLOSED_WITH_ERROR = 10
 	STATE_TRANSFERING_FILE = 11
-	
+
+	TIMEOUT_BACKOFF_FACTOR = [1.0, 1.0, 1.5, 1.5, 2.0]
+
 	def __init__(self, port = None, baudrate = None, callbackObject = None):
 		self._logger = logging.getLogger(__name__)
 		self._serialLogger = logging.getLogger("SERIAL")
@@ -152,6 +154,10 @@ class MachineCom(object):
 		self._currentExtruder = 0
 
 		self._timeout = None
+		self._timeoutCounter = 0
+		self._blockingCommand = False
+
+		self._unacknowledgedCommands = 0
 
 		self._alwaysSendChecksum = settings().getBoolean(["feature", "alwaysSendChecksum"])
 		self._currentLine = 1
@@ -669,6 +675,13 @@ class MachineCom(object):
 					break
 				if line.strip() is not "":
 					self._timeout = getNewTimeout("communication")
+					self._timeoutCounter = 0
+				if line.strip().startswith("ok"):
+					self._unacknowledgedCommands -= 1
+					if self._unacknowledgedCommands < 0:
+						self._unacknowledgedCommands = 0
+					if self._unacknowledgedCommands == 0 and self._blockingCommand:
+						self._blockingCommand = False
 
 				##~~ Error handling
 				line = self._handleErrors(line)
@@ -898,7 +911,7 @@ class MachineCom(object):
 
 				### Operational
 				elif self._state == self.STATE_OPERATIONAL or self._state == self.STATE_PAUSED:
-					#Request the temperature on comm timeout (every 5 seconds) when we are not printing.
+					#Request the temperature on comm timeout when we are not printing.
 					if line == "" or "wait" in line:
 						if self._resendDelta is not None:
 							self._resendNextCommand()
@@ -915,9 +928,16 @@ class MachineCom(object):
 
 				### Printing
 				elif self._state == self.STATE_PRINTING:
-					if line == "" and time.time() > self._timeout:
-						self._log("Communication timeout during printing, forcing a line")
-						line = 'ok'
+					if not self._blockingCommand:
+						if line == "" and time.time() > self._timeout and self._timeoutCounter > len(self.__class__.TIMEOUT_BACKOFF_FACTOR):
+							self._log("Communication timeout during printing, forcing a line")
+							line = "ok"
+						else:
+							self._timeout = getNewTimeout("communication", factor=self.__class__.TIMEOUT_BACKOFF_FACTOR[self._timeoutCounter])
+							self._timeoutCounter += 1
+							continue
+					else:
+						continue
 
 					if self.isSdPrinting():
 						if time.time() > tempRequestTimeout and not heatingUp:
@@ -1114,6 +1134,7 @@ class MachineCom(object):
 			if self._serial is None:
 				return
 
+			gcode = None
 			if not self.isStreaming():
 				for hook in self._gcode_hooks:
 					hook_cmd = self._gcode_hooks[hook](self, cmd)
@@ -1126,12 +1147,17 @@ class MachineCom(object):
 					if gcode in gcodeToEvent:
 						eventManager().fire(gcodeToEvent[gcode])
 
-					gcodeHandler = "_gcode_" + gcode
+					gcodeHandler = "_gcode_" + gcode + "_prepare"
 					if hasattr(self, gcodeHandler):
 						cmd = getattr(self, gcodeHandler)(cmd)
 
 			if cmd is not None:
 				self._doSend(cmd, sendChecksum)
+
+			if gcode:
+				gcodeHandler = "_gcode_" + gcode + "_sent"
+				if hasattr(self, gcodeHandler):
+					getattr(self, gcodeHandler)(cmd)
 
 	def _doSend(self, cmd, sendChecksum=False):
 		if sendChecksum or self._alwaysSendChecksum:
@@ -1158,6 +1184,7 @@ class MachineCom(object):
 			self._log("Serial timeout while writing to serial port, trying again.")
 			try:
 				self._serial.write(cmd + '\n')
+				self._unacknowledgedCommands += 1
 			except:
 				self._log("Unexpected error while writing serial port: %s" % (getExceptionString()))
 				self._errorValue = getExceptionString()
@@ -1167,13 +1194,13 @@ class MachineCom(object):
 			self._errorValue = getExceptionString()
 			self.close(True)
 
-	def _gcode_T(self, cmd):
+	def _gcode_T_sent(self, cmd):
 		toolMatch = self._regex_paramTInt.search(cmd)
 		if toolMatch:
 			self._currentExtruder = int(toolMatch.group(1))
 		return cmd
 
-	def _gcode_G0(self, cmd):
+	def _gcode_G0_sent(self, cmd):
 		if 'Z' in cmd:
 			match = self._regex_paramZFloat.search(cmd)
 			if match:
@@ -1185,14 +1212,14 @@ class MachineCom(object):
 				except ValueError:
 					pass
 		return cmd
-	_gcode_G1 = _gcode_G0
+	_gcode_G1_sent = _gcode_G0_sent
 
-	def _gcode_M0(self, cmd):
+	def _gcode_M0_prepare(self, cmd):
 		self.setPause(True)
 		return "M105" # Don't send the M0 or M1 to the machine, as M0 and M1 are handled as an LCD menu pause.
-	_gcode_M1 = _gcode_M0
+	_gcode_M1_prepare = _gcode_M0_prepare
 
-	def _gcode_M104(self, cmd):
+	def _gcode_M104_sent(self, cmd):
 		toolNum = self._currentExtruder
 		toolMatch = self._regex_paramTInt.search(cmd)
 		if toolMatch:
@@ -1210,7 +1237,7 @@ class MachineCom(object):
 				pass
 		return cmd
 
-	def _gcode_M140(self, cmd):
+	def _gcode_M140_sent(self, cmd):
 		match = self._regex_paramSInt.search(cmd)
 		if match:
 			try:
@@ -1224,15 +1251,15 @@ class MachineCom(object):
 				pass
 		return cmd
 
-	def _gcode_M109(self, cmd):
+	def _gcode_M109_sent(self, cmd):
 		self._heatupWaitStartTime = time.time()
-		return self._gcode_M104(cmd)
+		return self._gcode_M104_sent(cmd)
 
-	def _gcode_M190(self, cmd):
+	def _gcode_M190_sent(self, cmd):
 		self._heatupWaitStartTime = time.time()
-		return self._gcode_M140(cmd)
+		return self._gcode_M140_sent(cmd)
 
-	def _gcode_M110(self, cmd):
+	def _gcode_M110_prepare(self, cmd):
 		newLineNumber = None
 		match = self._regex_paramNInt.search(cmd)
 		if match:
@@ -1253,11 +1280,11 @@ class MachineCom(object):
 
 		return None
 
-	def _gcode_M112(self, cmd): # It's an emergency what todo? Canceling the print should be the minimum
+	def _gcode_M112_prepare(self, cmd): # It's an emergency what todo? Canceling the print should be the minimum
 		self.cancelPrint()
 		return cmd
 
-	def _gcode_G4(self, cmd):
+	def _gcode_G4_sent(self, cmd):
 		# we are intending to dwell for a period of time, increase the timeout to match
 		cmd = cmd.upper()
 		p_idx = cmd.find('P')
@@ -1270,6 +1297,15 @@ class MachineCom(object):
 			# dwell time is specified in seconds
 			_timeout = int(cmd[s_idx+1:])
 		self._timeout = getNewTimeout("communication") + _timeout
+		self._blockingCommand = True
+
+	def _gcode_G28_sent(self, cmd):
+		self._blockingCommand = True
+		self._log("Waiting for blocking command: %s" % cmd)
+	_gcode_G29_sent = _gcode_G28_sent
+	_gcode_G30_sent = _gcode_G28_sent
+	_gcode_G31_sent = _gcode_G28_sent
+	_gcode_G32_sent = _gcode_G28_sent
 
 ### MachineCom callback ################################################################################################
 
