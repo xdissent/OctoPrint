@@ -49,11 +49,11 @@ def _recursively_handle_files(directory, file_matcher, folder_handler=None, file
 
 class CleanCommand(Command):
 	description = "clean build artifacts"
-	user_options = []
-	boolean_options = []
+	user_options = [('all', 'a', 'all')]
+	boolean_options = ['all']
 
 	def initialize_options(self):
-		pass
+		self.all = None
 
 	def finalize_options(self):
 		pass
@@ -136,7 +136,7 @@ def params():
 
 	include_package_data = True
 	zip_safe = False
-	install_requires = open("requirements.txt").read().split("\n")
+	install_requires = open("requirements-dist.txt").read().split("\n")
 
 	entry_points = {
 		"console_scripts": [
