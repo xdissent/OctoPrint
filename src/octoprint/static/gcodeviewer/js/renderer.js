@@ -514,6 +514,16 @@ GCODE.renderer = (function(){
             }
             zoomFactor = Math.min((canvas.width - 10) / bedWidth, (canvas.height - 10) / bedHeight);
 
+            var translationX, translationY;
+            if (renderOptions["bed"]["circular"]) {
+                translationX = canvas.width / 2;
+                translationY = canvas.height / 2;
+            } else {
+                translationX = (canvas.width - bedWidth * zoomFactor) / 2;
+                translationY = bedHeight * zoomFactor + (canvas.height - bedHeight * zoomFactor) / 2;
+            }
+            ctx.translate(translationX, translationY);
+
             offsetModelX = 0;
             offsetModelY = 0;
             offsetBedX = 0;
