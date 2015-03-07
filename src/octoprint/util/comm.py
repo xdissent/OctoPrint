@@ -390,9 +390,8 @@ class MachineCom(object):
 			})
 
 			if self.isSdFileSelected():
-				if wasPaused:
-					self.sendCommand("M26 S0")
-					self._currentFile.setFilepos(0)
+				self.sendCommand("M26 S0")
+				self._currentFile.setFilepos(0)
 				self.sendCommand("M24")
 			else:
 				self._sendNext()
@@ -892,7 +891,7 @@ class MachineCom(object):
 							if self._resendDelta is not None:
 								self._resendNextCommand()
 							elif not self._commandQueue.empty() and not self.isStreaming():
-								self._sendCommand(self._commandQueue.get())
+								self._sendCommand(self._commandQueue.get(), True)
 							else:
 								self._sendNext()
 						elif line.lower().startswith("resend") or line.lower().startswith("rs"):
